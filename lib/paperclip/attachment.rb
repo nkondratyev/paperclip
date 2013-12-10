@@ -34,7 +34,7 @@ module Paperclip
       }
     end
 
-    attr_reader :name, :instance, :default_style, :convert_options, :queued_for_write, :whiny,
+    attr_reader :name, :instance, :default_style, :content_type_detector, :convert_options, :queued_for_write, :whiny,
                 :options, :interpolator, :source_file_options, :whiny
     attr_accessor :post_processing
 
@@ -78,6 +78,7 @@ module Paperclip
       @errors                = {}
       @dirty                 = false
       @interpolator          = options[:interpolator]
+      @content_type_detector = options.fetch(:content_type_detector, ContentTypeDetector)
       @url_generator         = options[:url_generator].new(self, @options)
       @source_file_options   = options[:source_file_options]
       @whiny                 = options[:whiny]
@@ -100,12 +101,19 @@ module Paperclip
       return nil if file.nil?
 
       @queued_for_write[:original]   = file
-      instance_write(:file_name,       cleanup_filename(file.original_filename))
-      instance_write(:content_type,    file.content_type.to_s.strip)
+      instance_write(:file_name,       cleanup_filename(file.original_filename.downcase))
+      instance_write(:content_type,    content_type_detector.new(file.path).detect.to_s.strip)
       instance_write(:file_size,       file.size)
       instance_write(:fingerprint,     file.fingerprint) if instance_respond_to?(:fingerprint)
       instance_write(:created_at,      Time.now) if has_enabled_but_unset_created_at?
       instance_write(:updated_at,      Time.now)
+
+      if valid_media_type?(format_content_type)
+        instance_write(:file_name,    real_filename)
+        instance_write(:content_type, format_content_type)
+      else
+        instance_write(:file_name,    content_type_filename)
+      end
 
       @dirty = true
 
@@ -363,6 +371,74 @@ module Paperclip
     end
 
     private
+    def real_filename
+      original_filename     = self.original_filename or return
+      original_content_type = self.content_type      or return original_filename
+      original_extension    = File.extname(original_filename)
+      original_basename     = File.basename(original_filename, original_extension)
+      original_extension    = original_extension.sub(/^\.+/, '')
+
+      mime_type  = MIME::Types[original_content_type]
+      extensions = mime_type.empty? ? [] : mime_type.first.extensions
+
+      formats = ((style = styles[:original]) && style[:formats]) || []
+      if formats.present?
+        extension = (formats & extensions || []).first || formats.first
+      else
+        extension = if extensions.include?(original_extension)
+          original_extension
+        elsif extensions.present?
+          extensions.first
+        end
+      end
+
+      if extension.present?
+        original_basename + '.' + extension
+      else
+        original_filename
+      end
+    end
+
+    def content_type_filename
+      original_filename     = self.original_filename or return
+      original_content_type = self.content_type      or return original_filename
+      original_extension    = File.extname(original_filename)
+      original_basename     = File.basename(original_filename, original_extension)
+      original_extension    = original_extension.sub(/^\.+/, '')
+
+      mime_type  = MIME::Types[original_content_type]
+      extensions = mime_type.empty? ? [] : mime_type.first.extensions
+
+      extension = if extensions.include?(original_extension)
+        original_extension
+      elsif extensions.present?
+        extensions.first
+      end
+
+      if extension.present?
+        original_basename + '.' + extension
+      else
+        original_filename
+      end
+    end
+
+    def format_content_type
+      content_type = self.content_type
+      filename     = self.original_filename or return content_type
+
+      if (types = MIME::Types.type_for(filename)).present?
+        types.first.content_type
+      else
+        content_type
+      end
+    end
+
+    def valid_media_type?(content_type)
+      original_content_type = self.content_type
+
+      original_content_type = MIME::Type.new(original_content_type) if original_content_type.is_a?(String)
+      original_content_type.present? && (original_content_type.media_type == 'image')
+    end
 
     def path_option
       @options[:path].respond_to?(:call) ? @options[:path].call(self) : @options[:path]

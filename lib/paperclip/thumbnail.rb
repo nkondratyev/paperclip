@@ -38,7 +38,7 @@ module Paperclip
       @whiny               = options[:whiny].nil? ? true : options[:whiny]
       @format              = options[:format]
       @animated            = options[:animated].nil? ? true : options[:animated]
-      @auto_orient         = options[:auto_orient].nil? ? true : options[:auto_orient]
+      @auto_orient         = options.fetch(:auto_orient, false)
       if @auto_orient && @current_geometry.respond_to?(:auto_orient)
         @current_geometry.auto_orient
       end
